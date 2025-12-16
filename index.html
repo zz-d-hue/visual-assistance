@@ -220,8 +220,9 @@
         ctx.font = "16px system-ui";
         ctx.fillText(text, 16, 26);
       }
-      function speakDetections(detections) {
+      function speakDetections(detections, source) {
         if (!speakOn) return;
+        if (mode === "server" && source !== "server") return;
         const now = performance.now();
         const labels = new Set();
         for (const det of detections) {
@@ -261,8 +262,12 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-        console.log("[detectServer] response status", resp);
-        if (!resp.ok) throw new Error("server error");
+        console.log("[detectServer] response status", resp.status);
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          console.error("[detectServer] upstream error", text);
+          throw new Error(text || "server error");
+        }
         const json = await resp.json();
         console.log("[detectServer] response json", json);
         return json.detections || [];
@@ -314,11 +319,17 @@
             map.set(key(d), d);
           }
           dets = Array.from(map.values());
+          lastDets = dets;
+          speakDetections(dets, "merged");
+          return;
         } else if (mode === "server") {
           try {
             setStatus("服务端识别中");
             dets = await detectServer();
             setStatus(`服务端识别成功（${dets.length}）`);
+            lastDets = dets;
+            speakDetections(dets, "server");
+            return;
           } catch (e) {
             try {
               if (!model) {
@@ -332,6 +343,9 @@
               setStatus("识别失败");
               dets = [];
             }
+            lastDets = dets;
+            speakDetections(dets, "local");
+            return;
           }
         } else {
           try {
@@ -342,6 +356,9 @@
             setStatus("本地模型识别中");
             dets = await model.detect(video);
             setStatus(`本地识别成功（${dets.length}）`);
+            lastDets = dets;
+            speakDetections(dets, "local");
+            return;
           } catch (e) {
             try {
               setStatus("服务端识别中");
@@ -351,10 +368,11 @@
               setStatus("识别失败");
               dets = [];
             }
+            lastDets = dets;
+            speakDetections(dets, "server");
+            return;
           }
         }
-        lastDets = dets;
-        speakDetections(dets);
       }
       async function loop() {
         if (!running) return;

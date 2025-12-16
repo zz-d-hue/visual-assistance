@@ -26,3 +26,21 @@ uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```
 http://localhost:8000/
 ```
+
+## 使用通义千问（OpenAI 兼容）
+
+无需改代码，设置以下环境变量即可切换到通义千问：
+
+```bash
+export OPENAI_API_KEY="你的通义千问Key"
+export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+export OPENAI_MODEL="qwen3-vl-plus"
+```
+
+启动服务：
+
+```bash
+uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+# 或
+python3 server.py
+```

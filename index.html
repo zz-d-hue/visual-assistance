@@ -59,7 +59,7 @@
         width: 100%;
         height: auto;
         display: block;
-        filter: brightness(1.35) contrast(1.15) saturate(1.05);
+        filter: none;
       }
       #canvas {
         position: absolute;
@@ -104,8 +104,8 @@
         <label>
           识别频率
           <select id="fpsSelect" aria-label="识别频率">
-            <option value="2">每秒2次</option>
-            <option value="4" selected>每秒4次</option>
+            <option value="2" selected>每秒2次</option>
+            <option value="4">每秒4次</option>
             <option value="8">每秒8次</option>
           </select>
         </label>
@@ -113,8 +113,8 @@
           识别方式
           <select id="modeSelect" aria-label="识别方式">
             <option value="local">本地优先</option>
-            <option value="server">服务端优先</option>
-            <option value="parallel" selected>并行识别</option>
+            <option value="server" selected>服务端优先</option>
+            <option value="parallel">并行识别</option>
           </select>
         </label>
       </div>
@@ -243,7 +243,7 @@
       }
       async function detectServer() {
         console.log("[detectServer] start POST", apiEndpoint);
-        captureCtx.filter = "brightness(1.35) contrast(1.15) saturate(1.05)";
+        captureCtx.filter = "none";
         captureCtx.drawImage(
           video,
           0,
@@ -401,7 +401,6 @@
                 facingMode: "environment",
                 width: { ideal: 1920 },
                 height: { ideal: 1080 },
-                advanced: [{ torch: true }],
               },
               audio: false,
             });

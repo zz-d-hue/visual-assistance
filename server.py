@@ -53,6 +53,7 @@ async def detect(req: Request):
         headers = {"Authorization": f"Bearer {DASHSCOPE_API_KEY}", "Content-Type": "application/json"}
         payload = {"model": DASHSCOPE_API_MODEL, "messages": messages, "temperature": 0.2, "response_format": {"type": "json_object"}}
         resp = requests.post(DASHSCOPE_API_URL, headers=headers, json=payload, timeout=60)
+        print(resp.json(), '响应数据')
         if resp.status_code >= 400:
             return JSONResponse({"error": "upstream error", "detail": resp.text}, status_code=502)
         data = resp.json()

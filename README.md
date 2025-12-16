@@ -1,46 +1,43 @@
 # visual_assistance
 
-## 启动后台
+## 启动步骤
 
-确保已安装依赖并设置环境变量：
+1. 启动后端（必需）
 
 ```bash
+# 安装依赖
 pip3 install fastapi uvicorn requests
-export OPENAI_API_KEY="你的key"
+
+# 配置通义千问兼容接口
+export DASHSCOPE_API_KEY="你的通义千问Key"
+export DASHSCOPE_API_URL="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+export DASHSCOPE_API_MODEL="qwen3-vl-plus"
+
+# 启动后端
+python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-启动服务（方式一，直接运行 Python 脚本）：
+2. 启动前端（React + TypeScript）
 
 ```bash
-python3 server.py
+cd web
+npm install
+npm run dev
 ```
 
-或使用 Uvicorn（方式二，推荐开发时热重载）：
-
-```bash
-uvicorn server:app --host 0.0.0.0 --port 8000 --reload
-```
-
-启动后访问：
+访问前端开发站点：
 
 ```
-http://localhost:8000/
+http://localhost:5173/
 ```
 
-## 使用通义千问（OpenAI 兼容）
+说明：
 
-无需改代码，设置以下环境变量即可切换到通义千问：
+- 前端已配置代理：`/api` → `http://localhost:8000`（见 `web/vite.config.ts`）
+- 后端必须运行，否则前端调用 `/api/vision/detect` 会报错
+- Node 版本建议：Node 18+
 
-```bash
-export OPENAI_API_KEY="你的通义千问Key"
-export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-export OPENAI_MODEL="qwen3-vl-plus"
-```
+常见问题：
 
-启动服务：
-
-```bash
-uvicorn server:app --host 0.0.0.0 --port 8000 --reload
-# 或
-python3 server.py
-```
+- 若 `5173` 已占用，Vite 会自动切换端口（如 `5174`）。
+- 若出现 `502`，查看浏览器控制台的接口返回文本，检查 `DASHSCOPE_API_*` 是否配置正确，以及图片负载是否可被兼容端点接受。

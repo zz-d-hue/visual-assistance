@@ -2,13 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, Switch, Select, Radio, Space, Badge } from 'antd';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import '@tensorflow/tfjs';
-
-type Det = {
-  bbox: [number, number, number, number];
-  label?: string;
-  class?: string;
-  score?: number;
-};
+import { COCO_CN, PH } from './constants';
+import { drawOverlay } from './overlay';
+import { ensureSpeechReady, speakText, unlockAudio } from './speech';
 
 export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -19,120 +15,24 @@ export default function App() {
   const spokenMapRef = useRef<Map<string, number>>(new Map());
   const lastMsRef = useRef<number>(0);
   const runningRef = useRef<boolean>(false);
-  const voicesRef = useRef<SpeechSynthesisVoice[] | null>(null);
   const lastDetsRef = useRef<Det[]>([]);
 
   const fovDeg = 60;
-  const PH: Record<string, number> = {
-    person: 1.7,
-    car: 1.4,
-    bicycle: 1.1,
-    motorcycle: 1.1,
-    dog: 0.5,
-    chair: 1,
-    bottle: 0.25,
-    cup: 0.1,
-    stop_sign: 2,
-    bench: 1
-  };
 
   const [running, setRunning] = useState(false);
   const [speakOn, setSpeakOn] = useState(true);
   const [fps, setFps] = useState(2);
   const [mode, setMode] = useState<'local' | 'server' | 'parallel'>('server');
   const [status, setStatus] = useState('未开始');
+  const [snapshotMode, setSnapshotMode] = useState(false);
 
   useEffect(() => {
     captureCanvasRef.current = document.createElement('canvas');
-    const handleVoices = () => {
-      try {
-        const vs = window.speechSynthesis.getVoices();
-        if (vs && vs.length > 0) voicesRef.current = vs;
-      } catch {}
-    };
-    try {
-      handleVoices();
-      (window.speechSynthesis as any).onvoiceschanged = handleVoices;
-    } catch {}
+    ensureSpeechReady();
     return () => {
       stop();
-      try {
-        (window.speechSynthesis as any).onvoiceschanged = null;
-      } catch {}
     };
   }, []);
-
-  function drawOverlay(dets: Det[]) {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.lineWidth = 3;
-
-    const labels = new Set<string>();
-    for (const det of dets) {
-      const [x, y, w, h] = det.bbox;
-      const label = det.label || det.class || '物体';
-      labels.add(label);
-
-      ctx.strokeStyle = 'rgba(0, 200, 255, 0.9)';
-      ctx.fillStyle = 'rgba(0, 200, 255, 0.18)';
-      ctx.strokeRect(x, y, w, h);
-      ctx.fillRect(x, y, w, h);
-
-      ctx.fillStyle = 'rgba(0,0,0,0.65)';
-      ctx.fillRect(x, y - 28, ctx.measureText(label).width + 16, 24);
-      ctx.fillStyle = '#00e0ff';
-      ctx.font = '18px system-ui';
-      ctx.fillText(label, x + 8, y - 10);
-    }
-
-    const text = `识别：${dets.length} · ${Array.from(labels).join('、')}`;
-    ctx.fillStyle = 'rgba(0,0,0,0.65)';
-    const tw = ctx.measureText(text).width + 16;
-    ctx.fillRect(8, 8, tw, 26);
-    ctx.fillStyle = '#00e0ff';
-    ctx.font = '16px system-ui';
-    ctx.fillText(text, 16, 26);
-  }
-
-  function ensureSpeechReady() {
-    try {
-      const vs = window.speechSynthesis.getVoices();
-      if (vs && vs.length > 0) voicesRef.current = vs;
-      window.speechSynthesis.resume();
-    } catch {}
-  }
-
-  function speakText(text: string) {
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'zh-CN';
-      const vs = voicesRef.current || window.speechSynthesis.getVoices();
-      const zh = vs?.find((v) => v.lang?.toLowerCase?.().startsWith('zh'));
-      if (zh) u.voice = zh;
-      u.rate = 1;
-      window.speechSynthesis.speak(u);
-    } catch {}
-  }
-
-  function unlockAudio() {
-    try {
-      const AC: any = (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (!AC) return;
-      const ctx = new AC();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      gain.gain.value = 0.0001;
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      setTimeout(() => {
-        osc.stop();
-        ctx.close();
-      }, 100);
-    } catch {}
-  }
 
   function speakDetections(dets: Det[], source: 'server' | 'local' | 'merged') {
     if (!speakOn) return;
@@ -238,7 +138,15 @@ export default function App() {
           modelRef.current = await cocoSsd.load();
         }
         setStatus('本地模型识别中');
-        const res = await modelRef.current.detect(video);
+        const rawRes = await modelRef.current.detect(video);
+        // 将英文 class 转换为中文 label，并强制转换为 Det 类型
+        const res: Det[] = rawRes.map((d) => {
+          const det = d as unknown as Det;
+          if (det.class && COCO_CN[det.class]) {
+            det.label = COCO_CN[det.class];
+          }
+          return det;
+        });
         setStatus(`本地识别成功（${res.length}）`);
         return res;
       } catch {
@@ -290,13 +198,16 @@ export default function App() {
   }
 
   async function drawFrame() {
+    // 只有在运行时才持续绘制
+    if (!runningRef.current) return;
+
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const captureCanvas = captureCanvasRef.current;
     if (!video || !canvas || !captureCanvas) return;
 
     // 移除了调试信息的绘制，只绘制检测框
-    drawOverlay(lastDetsRef.current);
+    drawOverlay(canvasRef.current, lastDetsRef.current);
   }
 
   async function loop() {
@@ -312,6 +223,14 @@ export default function App() {
   }
 
   async function start() {
+    setSnapshotMode(false);
+    // 启动时清除 Canvas 上的任何残留内容（包括快照和标注）
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (canvas && ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
     if (!window.isSecureContext) {
       alert('当前为非安全上下文，摄像头被阻止。请使用 https 或 localhost。');
       return;
@@ -366,13 +285,39 @@ export default function App() {
   }
 
   function stop() {
+    // 停止前先保留当前画面作为快照，并绘制标注
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (video && canvas && runningRef.current) {
+      try {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          // 确保 Canvas 尺寸与视频真实尺寸一致
+          if (video.videoWidth && video.videoHeight) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+          }
+          // 绘制视频当前帧到 canvas 作为背景
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          // 在背景之上绘制标注，不清除背景
+          drawOverlay(canvasRef.current, lastDetsRef.current, true);
+        }
+      } catch {}
+    }
+
     setRunning(false);
     runningRef.current = false;
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    const video = videoRef.current;
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+
+    // 停止视频流
     const tracks = video?.srcObject ? (video!.srcObject as MediaStream).getTracks() : [];
     tracks.forEach((t) => t.stop());
     if (video) video.srcObject = null;
+
+    setSnapshotMode(true);
   }
 
   return (
@@ -426,10 +371,20 @@ export default function App() {
       </div>
       <div className="grid place-items-center p-4">
         <div className="relative w-[92vw] max-w-[1200px]">
-          <video ref={videoRef} className="w-full h-auto block" playsInline autoPlay muted />
+          <video
+            ref={videoRef}
+            className={`w-full h-auto block ${snapshotMode ? 'hidden' : ''}`}
+            playsInline
+            autoPlay
+            muted
+          />
           <canvas
             ref={canvasRef}
-            className="absolute inset-0 w-full h-full bg-transparent rounded-lg"
+            className={
+              snapshotMode
+                ? 'w-full h-auto block rounded-lg'
+                : 'absolute inset-0 w-full h-full bg-transparent rounded-lg'
+            }
           />
         </div>
       </div>

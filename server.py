@@ -8,7 +8,8 @@ import requests
 
 app = FastAPI()
 
-DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "sk-411f9eafd8e44f7cb391db6eb116ecba")
+DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
+print(DASHSCOPE_API_KEY, 'DASHSCOPE_API_KEY')
 DASHSCOPE_API_URL = os.environ.get(
     "DASHSCOPE_API_URL",
     "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
@@ -79,12 +80,6 @@ async def detect(req: Request):
         return {"detections": outs}
     except:
         return JSONResponse({"error": "server error"}, status_code=500)
-
-@app.get("/")
-def root():
-    return JSONResponse({"ok": True, "service": "visual-assistance-api", "endpoints": ["/api/vision/detect"]})
-
-app.mount("/static", StaticFiles(directory=".", html=True), name="static")
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

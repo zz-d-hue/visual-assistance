@@ -19,6 +19,20 @@ export default function App() {
   const spokenMapRef = useRef<Map<string, number>>(new Map());
   const lastMsRef = useRef<number>(0);
   const runningRef = useRef<boolean>(false);
+  const voicesRef = useRef<SpeechSynthesisVoice[] | null>(null);
+  const fovDeg = 60;
+  const PH: Record<string, number> = {
+    person: 1.7,
+    car: 1.4,
+    bicycle: 1.1,
+    motorcycle: 1.1,
+    dog: 0.5,
+    chair: 1,
+    bottle: 0.25,
+    cup: 0.1,
+    stop_sign: 2,
+    bench: 1
+  };
 
   const [running, setRunning] = useState(false);
   const [speakOn, setSpeakOn] = useState(true);
@@ -30,8 +44,21 @@ export default function App() {
   useEffect(() => {
     const c = document.createElement('canvas');
     captureCanvasRef.current = c;
+    const handleVoices = () => {
+      try {
+        const vs = window.speechSynthesis.getVoices();
+        if (vs && vs.length > 0) voicesRef.current = vs;
+      } catch {}
+    };
+    try {
+      handleVoices();
+      (window.speechSynthesis as any).onvoiceschanged = handleVoices;
+    } catch {}
     return () => {
       stop();
+      try {
+        (window.speechSynthesis as any).onvoiceschanged = null;
+      } catch {}
     };
   }, []);
 
@@ -65,6 +92,44 @@ export default function App() {
     ctx.fillText(text, 16, 26);
   }
 
+  function ensureSpeechReady() {
+    try {
+      const vs = window.speechSynthesis.getVoices();
+      if (vs && vs.length > 0) voicesRef.current = vs;
+      window.speechSynthesis.resume();
+    } catch {}
+  }
+
+  function speakText(text: string) {
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'zh-CN';
+      const vs = voicesRef.current || window.speechSynthesis.getVoices();
+      const zh = vs?.find((v) => v.lang?.toLowerCase?.().startsWith('zh'));
+      if (zh) u.voice = zh;
+      u.rate = 1;
+      window.speechSynthesis.speak(u);
+    } catch {}
+  }
+
+  function unlockAudio() {
+    try {
+      const AC: any = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AC) return;
+      const ctx = new AC();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.0001;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      setTimeout(() => {
+        osc.stop();
+        ctx.close();
+      }, 100);
+    } catch {}
+  }
+
   function speakDetections(dets: Det[], source: 'server' | 'local' | 'merged') {
     if (!speakOn) return;
     if (mode === 'server' && source !== 'server') return;
@@ -72,16 +137,37 @@ export default function App() {
     const labels = new Set<string>();
     for (const d of dets) {
       if ((d.score ?? 0) < 0.3) continue;
-      const label = d.label || d.class || '物体';
-      labels.add(label);
+      const canvas = canvasRef.current;
+      if (!canvas) continue;
+      const w = canvas.width;
+      const h = canvas.height;
+      const [x, y, bw, bh] = d.bbox;
+      const cx = x + bw / 2;
+      const f = (0.5 * h) / Math.tan((fovDeg * Math.PI) / 360);
+      const ang = Math.atan((cx - w / 2) / f) * (180 / Math.PI);
+      const cls = (d.label || d.class || '物体').toLowerCase();
+      const rh = PH[cls];
+      const meters = rh ? Math.max(0.2, Math.min(50, (rh * f) / Math.max(1, bh))) : NaN;
+      let dir = '正前方';
+      if (ang <= -10) dir = '左前方';
+      else if (ang >= 10) dir = '右前方';
+      let speak = '';
+      if (!Number.isNaN(meters)) {
+        const m = Math.round(meters * 10) / 10;
+        if (dir === '正前方' && m <= 10) speak = `${dir}约${m}米 ${cls}`;
+        if (dir !== '正前方' && m <= 2) speak = `${dir}约${m}米 ${cls}`;
+      } else {
+        const ratio = bh / h;
+        if (dir === '正前方' && ratio >= 0.15) speak = `${dir}近距离 ${cls}`;
+        if (dir !== '正前方' && ratio >= 0.3) speak = `${dir}近距离 ${cls}`;
+      }
+      if (speak) labels.add(speak);
     }
     for (const label of labels) {
       const last = spokenMapRef.current.get(label) || 0;
       if (now - last > 4000) {
-        const u = new SpeechSynthesisUtterance(label);
-        u.lang = 'zh-CN';
-        u.rate = 1;
-        window.speechSynthesis.speak(u);
+        ensureSpeechReady();
+        speakText(label);
         spokenMapRef.current.set(label, now);
       }
     }
@@ -262,10 +348,9 @@ export default function App() {
       runningRef.current = true;
       setStatus('已启动');
       try {
-        const u = new SpeechSynthesisUtterance('识别已启动');
-        u.lang = 'zh-CN';
-        u.rate = 1;
-        window.speechSynthesis.speak(u);
+        unlockAudio();
+        ensureSpeechReady();
+        speakText('识别已启动');
       } catch {}
       await tickOnce();
       loop();
@@ -293,6 +378,9 @@ export default function App() {
           </Button>
           <Button onClick={stop} disabled={!running}>
             停止识别
+          </Button>
+          <Button onClick={() => { unlockAudio(); ensureSpeechReady(); speakText('语音测试'); }}>
+            测试语音
           </Button>
           <Space>
             <span>语音播报</span>

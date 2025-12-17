@@ -13,6 +13,6 @@ export default defineConfig({
         changeOrigin: true
       }
     },
-    allowedHosts: ['measurement-kiss-inform-contain.trycloudflare.com']
+    allowedHosts: ['ships-gratis-pensions-nationally.trycloudflare.com']
   }
 });

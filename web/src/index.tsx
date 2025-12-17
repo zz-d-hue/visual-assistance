@@ -20,6 +20,8 @@ export default function App() {
   const lastMsRef = useRef<number>(0);
   const runningRef = useRef<boolean>(false);
   const voicesRef = useRef<SpeechSynthesisVoice[] | null>(null);
+  const lastDetsRef = useRef<Det[]>([]);
+
   const fovDeg = 60;
   const PH: Record<string, number> = {
     person: 1.7,
@@ -39,11 +41,9 @@ export default function App() {
   const [fps, setFps] = useState(2);
   const [mode, setMode] = useState<'local' | 'server' | 'parallel'>('server');
   const [status, setStatus] = useState('未开始');
-  const [lastDets, setLastDets] = useState<Det[]>([]);
 
   useEffect(() => {
-    const c = document.createElement('canvas');
-    captureCanvasRef.current = c;
+    captureCanvasRef.current = document.createElement('canvas');
     const handleVoices = () => {
       try {
         const vs = window.speechSynthesis.getVoices();
@@ -68,21 +68,25 @@ export default function App() {
     if (!canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.lineWidth = 3;
+
     const labels = new Set<string>();
     for (const det of dets) {
       const [x, y, w, h] = det.bbox;
       const label = det.label || det.class || '物体';
       labels.add(label);
+
       ctx.strokeStyle = 'rgba(0, 200, 255, 0.9)';
       ctx.fillStyle = 'rgba(0, 200, 255, 0.18)';
       ctx.strokeRect(x, y, w, h);
       ctx.fillRect(x, y, w, h);
+
       ctx.fillStyle = 'rgba(0,0,0,0.65)';
       ctx.fillRect(x, y - 28, ctx.measureText(label).width + 16, 24);
       ctx.fillStyle = '#00e0ff';
       ctx.font = '18px system-ui';
       ctx.fillText(label, x + 8, y - 10);
     }
+
     const text = `识别：${dets.length} · ${Array.from(labels).join('、')}`;
     ctx.fillStyle = 'rgba(0,0,0,0.65)';
     const tw = ctx.measureText(text).width + 16;
@@ -133,36 +137,45 @@ export default function App() {
   function speakDetections(dets: Det[], source: 'server' | 'local' | 'merged') {
     if (!speakOn) return;
     if (mode === 'server' && source !== 'server') return;
+
     const now = performance.now();
     const labels = new Set<string>();
+
     for (const d of dets) {
       if ((d.score ?? 0) < 0.3) continue;
       const canvas = canvasRef.current;
       if (!canvas) continue;
+
       const w = canvas.width;
       const h = canvas.height;
       const [x, y, bw, bh] = d.bbox;
       const cx = x + bw / 2;
+
+      // 简单的测距逻辑
       const f = (0.5 * h) / Math.tan((fovDeg * Math.PI) / 360);
       const ang = Math.atan((cx - w / 2) / f) * (180 / Math.PI);
+
       const cls = (d.label || d.class || '物体').toLowerCase();
       const rh = PH[cls];
       const meters = rh ? Math.max(0.2, Math.min(50, (rh * f) / Math.max(1, bh))) : NaN;
+
       let dir = '正前方';
       if (ang <= -10) dir = '左前方';
       else if (ang >= 10) dir = '右前方';
+
       let speak = '';
       if (!Number.isNaN(meters)) {
         const m = Math.round(meters * 10) / 10;
         if (dir === '正前方' && m <= 10) speak = `${dir}约${m}米 ${cls}`;
-        if (dir !== '正前方' && m <= 2) speak = `${dir}约${m}米 ${cls}`;
+        else if (dir !== '正前方' && m <= 2) speak = `${dir}约${m}米 ${cls}`;
       } else {
         const ratio = bh / h;
         if (dir === '正前方' && ratio >= 0.15) speak = `${dir}近距离 ${cls}`;
-        if (dir !== '正前方' && ratio >= 0.3) speak = `${dir}近距离 ${cls}`;
+        else if (dir !== '正前方' && ratio >= 0.3) speak = `${dir}近距离 ${cls}`;
       }
       if (speak) labels.add(speak);
     }
+
     for (const label of labels) {
       const last = spokenMapRef.current.get(label) || 0;
       if (now - last > 4000) {
@@ -179,9 +192,11 @@ export default function App() {
     const captureCanvas = captureCanvasRef.current;
     const captureCtx = captureCanvas?.getContext('2d');
     if (!video || !canvas || !captureCanvas || !captureCtx) return [];
+
     captureCtx.filter = 'none';
     captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
     const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
+
     const resp = await fetch('/api/vision/detect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -191,6 +206,7 @@ export default function App() {
         height: canvas.height
       })
     });
+
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
       throw new Error(text || 'server error');
@@ -202,76 +218,75 @@ export default function App() {
   async function tickOnce() {
     const video = videoRef.current;
     if (!video) return;
-    let dets: Det[] = [];
-    if (mode === 'parallel') {
-      let serverDets: Det[] = [];
-      let localDets: Det[] = [];
+
+    // 辅助函数：执行服务端检测
+    const doServer = async () => {
       try {
         setStatus('服务端识别中');
-        serverDets = await detectServer();
-        setStatus(`服务端识别成功（${serverDets.length}）`);
+        const res = await detectServer();
+        setStatus(`服务端识别成功（${res.length}）`);
+        return res;
       } catch {
-        serverDets = [];
+        return [];
       }
+    };
+
+    // 辅助函数：执行本地检测
+    const doLocal = async () => {
       try {
         if (!modelRef.current) {
           modelRef.current = await cocoSsd.load();
         }
         setStatus('本地模型识别中');
-        localDets = await modelRef.current.detect(video);
-        setStatus(`本地识别成功（${localDets.length}）`);
+        const res = await modelRef.current.detect(video);
+        setStatus(`本地识别成功（${res.length}）`);
+        return res;
       } catch {
-        localDets = [];
+        return [];
       }
+    };
+
+    let dets: Det[] = [];
+    let source: 'server' | 'local' | 'merged' = 'local';
+
+    if (mode === 'parallel') {
+      const [sDets, lDets] = await Promise.all([doServer(), doLocal()]);
       const key = (d: Det) => `${d.label || d.class || '物体'}@${(d.bbox || []).join(',')}`;
       const map = new Map<string, Det>();
-      for (const d of [...serverDets, ...localDets]) map.set(key(d), d);
+      for (const d of [...sDets, ...lDets]) map.set(key(d), d);
       dets = Array.from(map.values());
-      setLastDets(dets);
-      speakDetections(dets, 'merged');
-      return;
-    }
-    if (mode === 'server') {
-      try {
-        setStatus('服务端识别中');
-        dets = await detectServer();
-        setStatus(`服务端识别成功（${dets.length}）`);
-        setLastDets(dets);
-        speakDetections(dets, 'server');
-        return;
-      } catch {}
-      try {
-        if (!modelRef.current) modelRef.current = await cocoSsd.load();
-        setStatus('本地模型识别中');
-        dets = await modelRef.current.detect(video);
-        setStatus(`本地识别成功（${dets.length}）`);
-      } catch {
-        setStatus('识别失败');
-        dets = [];
+      source = 'merged';
+    } else if (mode === 'server') {
+      dets = await doServer();
+      source = 'server';
+      if (dets.length === 0) {
+        // 如果服务端失败或无结果，尝试本地
+        const lDets = await doLocal();
+        if (lDets.length > 0) {
+          dets = lDets;
+          source = 'local';
+        } else {
+          setStatus('识别失败');
+        }
       }
-      setLastDets(dets);
-      speakDetections(dets, 'local');
-      return;
+    } else {
+      // local mode
+      dets = await doLocal();
+      source = 'local';
+      if (dets.length === 0) {
+        // 本地无结果，尝试服务端
+        const sDets = await doServer();
+        if (sDets.length > 0) {
+          dets = sDets;
+          source = 'server';
+        } else {
+          setStatus('识别失败');
+        }
+      }
     }
-    try {
-      if (!modelRef.current) modelRef.current = await cocoSsd.load();
-      setStatus('本地模型识别中');
-      dets = await modelRef.current.detect(video);
-      setStatus(`本地识别成功（${dets.length}）`);
-      setLastDets(dets);
-      speakDetections(dets, 'local');
-      return;
-    } catch {}
-    try {
-      setStatus('服务端识别中');
-      dets = await detectServer();
-      setStatus(`服务端识别成功（${dets.length}）`);
-    } catch {
-      setStatus('识别失败');
-      dets = [];
-    }
-    setLastDets(dets);
-    speakDetections(dets, 'server');
+
+    lastDetsRef.current = dets;
+    speakDetections(dets, source);
   }
 
   async function drawFrame() {
@@ -279,16 +294,9 @@ export default function App() {
     const canvas = canvasRef.current;
     const captureCanvas = captureCanvasRef.current;
     if (!video || !canvas || !captureCanvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const info = `video rs=${video.readyState} ${video.videoWidth}x${video.videoHeight}`;
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    const tw = ctx.measureText(info).width + 16;
-    ctx.fillRect(canvas.width - tw - 8, 8, tw, 22);
-    ctx.fillStyle = '#ccc';
-    ctx.font = '14px system-ui';
-    ctx.fillText(info, canvas.width - tw, 24);
-    drawOverlay(lastDets || []);
+
+    // 移除了调试信息的绘制，只绘制检测框
+    drawOverlay(lastDetsRef.current);
   }
 
   async function loop() {
@@ -312,22 +320,16 @@ export default function App() {
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'environment',
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
-          },
+          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false
         });
       } catch {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false
         });
       }
+
       const video = videoRef.current!;
       video.srcObject = stream;
       await new Promise<void>((resolve) => {
@@ -336,6 +338,7 @@ export default function App() {
       try {
         await video.play();
       } catch {}
+
       const w = video.videoWidth || 1280;
       const h = video.videoHeight || 720;
       const canvas = canvasRef.current!;
@@ -344,14 +347,17 @@ export default function App() {
       canvas.height = h;
       captureCanvas.width = w;
       captureCanvas.height = h;
+
       setRunning(true);
       runningRef.current = true;
       setStatus('已启动');
+
       try {
         unlockAudio();
         ensureSpeechReady();
         speakText('识别已启动');
       } catch {}
+
       await tickOnce();
       loop();
     } catch (e: any) {
@@ -379,7 +385,13 @@ export default function App() {
           <Button onClick={stop} disabled={!running}>
             停止识别
           </Button>
-          <Button onClick={() => { unlockAudio(); ensureSpeechReady(); speakText('语音测试'); }}>
+          <Button
+            onClick={() => {
+              unlockAudio();
+              ensureSpeechReady();
+              speakText('语音测试');
+            }}
+          >
             测试语音
           </Button>
           <Space>
@@ -422,7 +434,7 @@ export default function App() {
         </div>
       </div>
       <div className="fixed bottom-2 right-2 text-sm text-neutral-600">
-        <Badge status="processing" text={`状态：${status} · 服务端大模型识别 · React 前端`} />
+        <Badge status="processing" text={`状态：${status} · 服务端大模型识别`} />
       </div>
     </div>
   );

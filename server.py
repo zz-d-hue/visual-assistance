@@ -58,6 +58,7 @@ async def detect(req: Request):
             return JSONResponse({"error": "upstream error", "detail": resp.text}, status_code=502)
         try:
             data = resp.json()
+            print(data, 'data')
         except:
             return JSONResponse({"error": "upstream invalid json", "detail": resp.text}, status_code=502)
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")

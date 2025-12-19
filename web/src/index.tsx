@@ -42,7 +42,7 @@ export default function App() {
     if (mode === 'server' && source !== 'server') return;
 
     const now = performance.now();
-    const labels = new Set<string>();
+    const sentences: string[] = [];
 
     for (const d of dets) {
       if ((d.score ?? 0) < 0.3) continue;
@@ -51,7 +51,7 @@ export default function App() {
 
       const w = canvas.width;
       const h = canvas.height;
-      const [x, y, bw, bh] = d.bbox;
+      const [x, _y, bw, bh] = d.bbox;
       const cx = x + bw / 2;
 
       const f = (0.5 * h) / Math.tan((fovDeg * Math.PI) / 360);
@@ -89,15 +89,22 @@ export default function App() {
           else if (dir !== '正前方' && ratio >= 0.3) speak = `${dir}近距离 ${cls}`;
         }
       }
-      if (speak) labels.add(speak);
+      if (!speak) continue;
+
+      const key = speak;
+      const last = spokenMapRef.current.get(key) || 0;
+      const shouldSpeak = moving || last === 0 || now - last > 4000;
+      if (shouldSpeak) {
+        sentences.push(speak);
+        if (!moving) {
+          spokenMapRef.current.set(key, now);
+        }
+      }
     }
 
-    for (const label of labels) {
-      const last = spokenMapRef.current.get(label) || 0;
-      if (now - last > 4000) {
-        speakText(label, voice);
-        spokenMapRef.current.set(label, now);
-      }
+    if (sentences.length > 0) {
+      const merged = sentences.join('，');
+      speakText(merged, voice);
     }
   }
 

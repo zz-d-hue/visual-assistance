@@ -13,6 +13,6 @@ export default defineConfig({
         changeOrigin: true
       }
     },
-    allowedHosts: ['strengthening-staffing-housewives-creative.trycloudflare.com']
+    allowedHosts: ['laptops-mysimon-else-refers.trycloudflare.com']
   }
 });

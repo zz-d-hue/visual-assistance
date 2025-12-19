@@ -5,6 +5,8 @@ interface QueueItem {
 
 const queue: QueueItem[] = [];
 let isProcessing = false;
+let audioUnlocked = false;
+let audioCtx: AudioContext | null = null;
 
 export async function speakText(text: string, voice: string = 'female_warm') {
   queue.push({ text, voice });
@@ -22,6 +24,12 @@ async function processQueue() {
     return;
   }
 
+  if (!audioUnlocked) {
+    queue.unshift(item);
+    isProcessing = false;
+    return;
+  }
+
   try {
     const r = await fetch('/api/voice/tts', {
       method: 'POST',
@@ -32,12 +40,38 @@ async function processQueue() {
       const j = await r.json();
       const b64 = j.audio_base64;
       if (b64) {
-        const fmt = (j.format as string) || 'mp3';
-        const a = new Audio(`data:audio/${fmt};base64,${b64}`);
+        const ctx = audioCtx;
+        if (!ctx) return;
+
+        const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const buf = bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength);
+
+        let audioBuffer: AudioBuffer | null = null;
+        try {
+          audioBuffer = await ctx.decodeAudioData(buf.slice(0));
+        } catch {
+          audioBuffer = null;
+        }
+        if (!audioBuffer) return;
+
         await new Promise<void>((resolve) => {
-          a.onended = () => resolve();
-          a.onerror = () => resolve();
-          a.play().catch(() => resolve());
+          const src = ctx.createBufferSource();
+          src.buffer = audioBuffer;
+          src.connect(ctx.destination);
+          src.onended = () => {
+            try {
+              src.disconnect();
+            } catch {}
+            resolve();
+          };
+          try {
+            src.start(0);
+          } catch {
+            try {
+              src.disconnect();
+            } catch {}
+            resolve();
+          }
         });
       }
     }
@@ -55,17 +89,34 @@ export function unlockAudio() {
   try {
     const AC: any = (window as any).AudioContext || (window as any).webkitAudioContext;
     if (!AC) return;
-    const ctx = new AC();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    gain.gain.value = 0.0001;
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    setTimeout(() => {
-      osc.stop();
-      ctx.close();
-    }, 100);
+    if (!audioCtx) {
+      audioCtx = new AC();
+    }
+    const ctx = audioCtx;
+    if (!ctx) return;
+    try {
+      (ctx as any).resume?.();
+    } catch {}
+    try {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.0001;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      setTimeout(() => {
+        try {
+          osc.stop();
+        } catch {}
+        try {
+          osc.disconnect();
+        } catch {}
+        try {
+          gain.disconnect();
+        } catch {}
+      }, 50);
+    } catch {}
+    audioUnlocked = true;
   } catch {}
 }
 

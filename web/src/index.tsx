@@ -4,7 +4,7 @@ import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import '@tensorflow/tfjs';
 import { COCO_CN, PH } from './constants';
 import { drawOverlay } from './overlay';
-import { ensureSpeechReady, speakText, unlockAudio } from './speech';
+import { speakText, unlockAudio, startRecord, stopAndTranscribe } from './speech';
 
 export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -13,6 +13,7 @@ export default function App() {
   const modelRef = useRef<cocoSsd.ObjectDetection | null>(null);
   const rafRef = useRef<number | null>(null);
   const spokenMapRef = useRef<Map<string, number>>(new Map());
+  const lastImageRef = useRef<string | null>(null);
   const lastMsRef = useRef<number>(0);
   const runningRef = useRef<boolean>(false);
   const lastDetsRef = useRef<Det[]>([]);
@@ -25,10 +26,12 @@ export default function App() {
   const [mode, setMode] = useState<'local' | 'server' | 'parallel'>('server');
   const [status, setStatus] = useState('未开始');
   const [snapshotMode, setSnapshotMode] = useState(false);
+  const [voice, setVoice] = useState<'female_warm' | 'female_bright' | 'male_deep'>('female_warm');
+  const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
+  const [asrText, setAsrText] = useState<string>('');
 
   useEffect(() => {
     captureCanvasRef.current = document.createElement('canvas');
-    ensureSpeechReady();
     return () => {
       stop();
     };
@@ -51,7 +54,6 @@ export default function App() {
       const [x, y, bw, bh] = d.bbox;
       const cx = x + bw / 2;
 
-      // 简单的测距逻辑
       const f = (0.5 * h) / Math.tan((fovDeg * Math.PI) / 360);
       const ang = Math.atan((cx - w / 2) / f) * (180 / Math.PI);
 
@@ -64,14 +66,28 @@ export default function App() {
       else if (ang >= 10) dir = '右前方';
 
       let speak = '';
-      if (!Number.isNaN(meters)) {
-        const m = Math.round(meters * 10) / 10;
-        if (dir === '正前方' && m <= 10) speak = `${dir}约${m}米 ${cls}`;
-        else if (dir !== '正前方' && m <= 2) speak = `${dir}约${m}米 ${cls}`;
+      const pos = (d as any).position as string | undefined;
+      const dist = (d as any).distance_m as number | undefined;
+      const moving = !!(d as any).moving;
+      if (pos && typeof dist === 'number') {
+        if (moving && dist <= 10 && pos === '正前方')
+          speak = `${pos}移动物体约${Math.round(dist * 10) / 10}米 ${cls}`;
+        else if (moving && dist <= 2 && pos !== '正前方')
+          speak = `${pos}移动物体约${Math.round(dist * 10) / 10}米 ${cls}`;
+        else if (pos === '正前方' && dist <= 10)
+          speak = `${pos}约${Math.round(dist * 10) / 10}米 ${cls}`;
+        else if (pos !== '正前方' && dist <= 2)
+          speak = `${pos}约${Math.round(dist * 10) / 10}米 ${cls}`;
       } else {
-        const ratio = bh / h;
-        if (dir === '正前方' && ratio >= 0.15) speak = `${dir}近距离 ${cls}`;
-        else if (dir !== '正前方' && ratio >= 0.3) speak = `${dir}近距离 ${cls}`;
+        if (!Number.isNaN(meters)) {
+          const m = Math.round(meters * 10) / 10;
+          if (dir === '正前方' && m <= 10) speak = `${dir}约${m}米 ${cls}`;
+          else if (dir !== '正前方' && m <= 2) speak = `${dir}约${m}米 ${cls}`;
+        } else {
+          const ratio = bh / h;
+          if (dir === '正前方' && ratio >= 0.15) speak = `${dir}近距离 ${cls}`;
+          else if (dir !== '正前方' && ratio >= 0.3) speak = `${dir}近距离 ${cls}`;
+        }
       }
       if (speak) labels.add(speak);
     }
@@ -79,8 +95,7 @@ export default function App() {
     for (const label of labels) {
       const last = spokenMapRef.current.get(label) || 0;
       if (now - last > 4000) {
-        ensureSpeechReady();
-        speakText(label);
+        speakText(label, voice);
         spokenMapRef.current.set(label, now);
       }
     }
@@ -102,6 +117,7 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         image: dataUrl,
+        prev_image: lastImageRef.current,
         width: canvas.width,
         height: canvas.height
       })
@@ -112,6 +128,7 @@ export default function App() {
       throw new Error(text || 'server error');
     }
     const json = await resp.json();
+    lastImageRef.current = dataUrl;
     return (json.detections ?? []) as Det[];
   }
 
@@ -273,7 +290,6 @@ export default function App() {
 
       try {
         unlockAudio();
-        ensureSpeechReady();
         speakText('识别已启动');
       } catch {}
 
@@ -333,15 +349,58 @@ export default function App() {
           <Button
             onClick={() => {
               unlockAudio();
-              ensureSpeechReady();
-              speakText('语音测试');
+              speakText('语音测试', voice);
             }}
           >
             测试语音
           </Button>
           <Space>
+            <span>语音音色</span>
+            <Select
+              value={voice}
+              onChange={(v) => setVoice(v as any)}
+              options={[
+                { value: 'female_warm', label: '温柔女声' },
+                { value: 'Jada', label: '上海女声' },
+                { value: 'Ethan', label: '沉稳男声' }
+              ]}
+              style={{ width: 140 }}
+            />
+          </Space>
+          <Space>
             <span>语音播报</span>
             <Switch checked={speakOn} onChange={setSpeakOn} />
+          </Space>
+          <Space>
+            <Button
+              disabled={!!recorder}
+              onClick={async () => {
+                const rec = await startRecord();
+                if (rec) {
+                  rec.start();
+                  setRecorder(rec);
+                  setAsrText('');
+                }
+              }}
+            >
+              开始录音
+            </Button>
+            <Button
+              disabled={!recorder}
+              onClick={async () => {
+                const rec = recorder;
+                if (!rec) return;
+                const text = await stopAndTranscribe(rec);
+                setRecorder(null);
+                setAsrText(text || '');
+                if (text) {
+                  speakText(text, voice);
+                }
+              }}
+            >
+              停止并转写
+            </Button>
+            {asrText ? <Badge count="已转写" /> : null}
           </Space>
           <Space>
             <span>识别频率</span>

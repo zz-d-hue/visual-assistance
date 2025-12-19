@@ -1,48 +1,71 @@
 import os
 import json
+import base64
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import requests
+import dashscope
+import tempfile
+from openai import OpenAI
 
 app = FastAPI()
 
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
-print(DASHSCOPE_API_KEY, 'DASHSCOPE_API_KEY')
+# Use compatible mode endpoint
 DASHSCOPE_API_URL = os.environ.get(
     "DASHSCOPE_API_URL",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
 )
-DASHSCOPE_API_MODEL = os.environ.get("DASHSCOPE_API_MODEL", "qwen3-vl-plus")
+# Use qwen-vl-max for better speed/quality as requested (user asked for qwen-plus but that is text-only)
+DASHSCOPE_API_MODEL = os.environ.get("DASHSCOPE_API_MODEL", "qwen-vl-max")
+DASHSCOPE_ASR_MODEL = os.environ.get("DASHSCOPE_ASR_MODEL", "qwen3-asr-flash")
+DASHSCOPE_TTS_MODEL = os.environ.get("DASHSCOPE_TTS_MODEL", "qwen3-tts-flash")
 
 @app.post("/api/vision/detect")
 async def detect(req: Request):
     try:
         body = await req.json()
         image = body.get("image")
+        prev_image = body.get("prev_image")
         width = body.get("width")
         height = body.get("height")
         if not image or not width or not height:
             return JSONResponse({"error": "missing image/width/height"}, status_code=400)
         if not DASHSCOPE_API_KEY:
             return JSONResponse({"error": "DASHSCOPE_API_KEY not set"}, status_code=503)
+
+        client = OpenAI(
+            api_key=DASHSCOPE_API_KEY,
+            base_url=DASHSCOPE_API_URL,
+        )
+
         messages = [
             {
                 "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "你是一名视觉识别助手。请对图像中的主要物体进行检测，返回中文标签和像素级边界框。仅输出 JSON。"
-                    }
-                ],
+                "content": "你是一名视觉识别助手，面向视力障碍用户。请基于输入画面返回结构化 JSON，直接可用于语音播报：仅输出 JSON，不要包含多余文本。"
             },
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
-                        "text": f'请以如下 JSON 返回：{{"detections":[{{"label":"中文名称","bbox":[x,y,w,h],"score":0.0}}]}} 坐标单位为像素，基于画布尺寸 width={width}, height={height}。确保 bbox 在图像范围内，score 范围 0-1。'
+                        "text": (
+                            f"画布尺寸为 width={width}, height={height}。"
+                            "请检测主要物体并输出如下 JSON："
+                            "{\"detections\":["
+                            "{\"label\":\"中文名称\",\"bbox\":[x,y,w,h],\"score\":0.0,"
+                            "\"position\":\"左前方|右前方|正前方\",\"distance_m\":0.0,"
+                            "\"moving\":false,\"urgency\":\"高|中|低\",\"reason\":\"简短中文理由\"}"
+                            "]}"
+                            "要求：1) bbox 单位为像素，需在画布范围内；"
+                            "2) position 按水平角度粗分：x+bw/2 < 0.45*width 视为左前方，> 0.55*width 视为右前方，其他为正前方；"
+                            "3) distance_m 若能估计则给出近似值，否则填 null；可依据目标在画面中的相对高度比 h/height 粗略估计；"
+                            "4) 若同时提供上一帧图像，请比较两帧判断 moving（中心或尺寸显著变化视为 true）；"
+                            "5) urgency 根据是否移动、是否在正前方、是否近距离综合给出；"
+                            "仅输出 JSON。"
+                        )
                     },
                     {
                         "type": "image_url",
@@ -51,34 +74,152 @@ async def detect(req: Request):
                 ],
             },
         ]
-        headers = {"Authorization": f"Bearer {DASHSCOPE_API_KEY}", "Content-Type": "application/json"}
-        payload = {"model": DASHSCOPE_API_MODEL, "messages": messages, "temperature": 0.2, "response_format": {"type": "json_object"}}
-        resp = requests.post(DASHSCOPE_API_URL, headers=headers, json=payload, timeout=60)
-        if resp.status_code >= 400:
-            return JSONResponse({"error": "upstream error", "detail": resp.text}, status_code=502)
-        try:
-            data = resp.json()
-            print(data, 'data')
-        except:
-            return JSONResponse({"error": "upstream invalid json", "detail": resp.text}, status_code=502)
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+        if prev_image:
+            messages[1]["content"].append({
+                "type": "image_url",
+                "image_url": {"url": prev_image}
+            })
+
+        completion = client.chat.completions.create(
+            model=DASHSCOPE_API_MODEL,
+            messages=messages,
+            temperature=0.2,
+            response_format={"type": "json_object"}
+        )
+
+        content = completion.choices[0].message.content
         try:
             parsed = json.loads(content)
         except:
             parsed = {"detections": []}
-        if not isinstance(parsed.get("detections"), list):
-            parsed["detections"] = []
-        outs = []
-        for d in parsed["detections"]:
-            bbox = d.get("bbox") if isinstance(d.get("bbox"), list) else [0, 0, 0, 0]
-            x = max(0, min(int(width) - 1, int(bbox[0] if len(bbox) > 0 else 0)))
-            y = max(0, min(int(height) - 1, int(bbox[1] if len(bbox) > 1 else 0)))
-            w = max(0, min(int(width), int(bbox[2] if len(bbox) > 2 else 0)))
-            h = max(0, min(int(height), int(bbox[3] if len(bbox) > 3 else 0)))
-            score = d.get("score", 0.5)
-            label = d.get("label", "物体")
-            outs.append({"label": label, "bbox": [x, y, w, h], "score": score})
-        return {"detections": outs}
+        return parsed
+    except Exception as e:
+        print(f"Error: {e}")
+        return JSONResponse({"error": "server error", "detail": str(e)}, status_code=500)
+
+@app.post("/api/voice/asr")
+async def asr(req: Request):
+    try:
+        if not DASHSCOPE_API_KEY:
+            return JSONResponse({"error": "DASHSCOPE_API_KEY not set"}, status_code=503)
+        if dashscope is None:
+            return JSONResponse({"error": "dashscope sdk not installed"}, status_code=503)
+        body = await req.json()
+        audio_b64 = body.get("audio_base64")
+        if not audio_b64:
+            return JSONResponse({"error": "missing audio_base64"}, status_code=400)
+
+        try:
+            raw = base64.b64decode(audio_b64)
+        except Exception:
+            return JSONResponse({"error": "invalid base64"}, status_code=400)
+
+        # 将前端上传的音频临时落盘为本地文件，并以 file:// 形式供 SDK 读取
+        # 由于前端使用 MediaRecorder('audio/webm')，这里默认保存为 .webm
+        # 若你已切换前端为 wav，可改为 .wav
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+            tmp.write(raw)
+            tmp_path = tmp.name
+        file_url = f"file://{tmp_path}"
+
+        try:
+            dashscope.base_http_api_url = 'https://dashscope.aliyuncs.com/api/v1'
+            messages = [
+                {"role": "system", "content": [{"text": ""}]},
+                {"role": "user", "content": [{"audio": file_url}]},
+            ]
+            resp = dashscope.MultiModalConversation.call(
+                api_key=DASHSCOPE_API_KEY,
+                model=DASHSCOPE_ASR_MODEL,
+                messages=messages,
+                result_format="message",
+                asr_options={
+                    # 可按需开启 ITN（数字等正规化）
+                    "enable_itn": False,
+                },
+            )
+        except Exception as e:
+            # 清理临时文件
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+            return JSONResponse({"error": "asr upstream error", "detail": str(e)}, status_code=502)
+
+        # 清理临时文件
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+        # 解析 SDK 返回的 message 格式，尽量稳健地抽取文本
+        text = ""
+        try:
+            out = getattr(resp, "output", None)
+            choices = getattr(out, "choices", None)
+            if choices and isinstance(choices, list) and len(choices) > 0:
+                msg = getattr(choices[0], "message", None)
+                content = getattr(msg, "content", None)
+                if isinstance(content, list) and len(content) > 0:
+                    for item in content:
+                        if isinstance(item, dict) and "text" in item:
+                            text = item.get("text") or ""
+                            if text:
+                                break
+                elif isinstance(content, str):
+                    text = content
+        except Exception:
+            text = text or ""
+
+        return {"text": text or ""}
+    except:
+        return JSONResponse({"error": "server error"}, status_code=500)
+
+@app.post("/api/voice/tts")
+async def tts(req: Request):
+    try:
+        if not DASHSCOPE_API_KEY:
+            return JSONResponse({"error": "DASHSCOPE_API_KEY not set"}, status_code=503)
+        if dashscope is None:
+            return JSONResponse({"error": "dashscope sdk not installed"}, status_code=503)
+        body = await req.json()
+        text = body.get("text")
+        raw_voice = body.get("voice", "female_warm")
+        voice_map = {
+            "female_warm": "Cherry",
+            "female_bright": "Sunny",
+            "male_deep": "Ryan",
+        }
+        voice = voice_map.get(raw_voice, raw_voice)
+        if not text:
+            return JSONResponse({"error": "missing text"}, status_code=400)
+        try:
+            dashscope.base_http_api_url = 'https://dashscope.aliyuncs.com/api/v1'
+            resp = dashscope.MultiModalConversation.call(
+                model=DASHSCOPE_TTS_MODEL,
+                api_key=DASHSCOPE_API_KEY,
+                text=text,
+                voice=voice,
+                language_type="Chinese",
+                stream=False,
+            )
+        except Exception as e:
+            return JSONResponse({"error": "tts upstream error", "detail": str(e)}, status_code=502)
+        audio_url = ""
+        try:
+            audio_url = getattr(getattr(resp, "output", None), "audio", None).url  # type: ignore
+        except Exception:
+            audio_url = ""
+        if not audio_url:
+            return JSONResponse({"error": "empty audio url"}, status_code=502)
+        try:
+            ar = requests.get(audio_url, timeout=60)
+        except Exception as e:
+            return JSONResponse({"error": "download audio failed", "detail": str(e)}, status_code=502)
+        if ar.status_code >= 400:
+            return JSONResponse({"error": "download audio failed", "detail": ar.text}, status_code=502)
+        audio_b64 = base64.b64encode(ar.content).decode("ascii")
+        return {"audio_base64": audio_b64, "format": "wav"}
     except:
         return JSONResponse({"error": "server error"}, status_code=500)
 

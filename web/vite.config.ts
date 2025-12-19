@@ -13,6 +13,6 @@ export default defineConfig({
         changeOrigin: true
       }
     },
-    allowedHosts: ['ships-gratis-pensions-nationally.trycloudflare.com']
+    allowedHosts: ['strengthening-staffing-housewives-creative.trycloudflare.com']
   }
 });

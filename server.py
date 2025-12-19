@@ -19,7 +19,7 @@ DASHSCOPE_API_URL = os.environ.get(
     "https://dashscope.aliyuncs.com/compatible-mode/v1",
 )
 # Use qwen-vl-max for better speed/quality as requested (user asked for qwen-plus but that is text-only)
-DASHSCOPE_API_MODEL = os.environ.get("DASHSCOPE_API_MODEL", "qwen-vl-max")
+DASHSCOPE_API_MODEL = os.environ.get("DASHSCOPE_API_MODEL", "qwen3-vl-flash")
 DASHSCOPE_ASR_MODEL = os.environ.get("DASHSCOPE_ASR_MODEL", "qwen3-asr-flash")
 DASHSCOPE_TTS_MODEL = os.environ.get("DASHSCOPE_TTS_MODEL", "qwen3-tts-flash")
 
@@ -86,6 +86,7 @@ async def detect(req: Request):
             temperature=0.2,
             response_format={"type": "json_object"}
         )
+        print(completion.model_dump_json(),'识别结果')
 
         content = completion.choices[0].message.content
         try:

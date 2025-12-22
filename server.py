@@ -1,6 +1,8 @@
 import os
 import json
 import base64
+import time
+import re
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -9,19 +11,19 @@ import requests
 import dashscope
 import tempfile
 from openai import OpenAI
+from dashscope.audio.tts_v2 import VoiceEnrollmentService, SpeechSynthesizer
 
 app = FastAPI()
 
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
-# Use compatible mode endpoint
-DASHSCOPE_API_URL = os.environ.get(
-    "DASHSCOPE_API_URL",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
 # Use qwen-vl-max for better speed/quality as requested (user asked for qwen-plus but that is text-only)
 DASHSCOPE_API_MODEL = os.environ.get("DASHSCOPE_API_MODEL", "qwen3-vl-flash")
 DASHSCOPE_ASR_MODEL = os.environ.get("DASHSCOPE_ASR_MODEL", "qwen3-asr-flash")
 DASHSCOPE_TTS_MODEL = os.environ.get("DASHSCOPE_TTS_MODEL", "qwen3-tts-flash")
+DASHSCOPE_COSY_TTS_MODEL = os.environ.get("DASHSCOPE_COSY_TTS_MODEL", "cosyvoice-v3-flash")
+
+if DASHSCOPE_API_KEY:
+    dashscope.api_key = DASHSCOPE_API_KEY
 
 @app.post("/api/vision/detect")
 async def detect(req: Request):
@@ -38,7 +40,7 @@ async def detect(req: Request):
 
         client = OpenAI(
             api_key=DASHSCOPE_API_KEY,
-            base_url=DASHSCOPE_API_URL,
+            base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
         )
 
         messages = [
@@ -86,7 +88,7 @@ async def detect(req: Request):
             temperature=0.2,
             response_format={"type": "json_object"}
         )
-        print(completion.model_dump_json(),'识别结果')
+        # print(completion.model_dump_json(),'识别结果')
 
         content = completion.choices[0].message.content
         try:
@@ -186,14 +188,24 @@ async def tts(req: Request):
         body = await req.json()
         text = body.get("text")
         raw_voice = body.get("voice", "female_warm")
+        if not text:
+            return JSONResponse({"error": "missing text"}, status_code=400)
+
+        if isinstance(raw_voice, str) and raw_voice.startswith("cosyvoice-"):
+            try:
+                synthesizer = SpeechSynthesizer(model=DASHSCOPE_COSY_TTS_MODEL, voice=raw_voice)
+                audio_bytes = synthesizer.call(text)
+            except Exception as e:
+                return JSONResponse({"error": "tts upstream error", "detail": str(e)}, status_code=502)
+            audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
+            return {"audio_base64": audio_b64, "format": "mp3"}
+
         voice_map = {
             "female_warm": "Cherry",
             "female_bright": "Sunny",
             "male_deep": "Ryan",
         }
         voice = voice_map.get(raw_voice, raw_voice)
-        if not text:
-            return JSONResponse({"error": "missing text"}, status_code=400)
         try:
             dashscope.base_http_api_url = 'https://dashscope.aliyuncs.com/api/v1'
             resp = dashscope.MultiModalConversation.call(
@@ -221,6 +233,49 @@ async def tts(req: Request):
             return JSONResponse({"error": "download audio failed", "detail": ar.text}, status_code=502)
         audio_b64 = base64.b64encode(ar.content).decode("ascii")
         return {"audio_base64": audio_b64, "format": "wav"}
+    except:
+        return JSONResponse({"error": "server error"}, status_code=500)
+
+
+@app.post("/api/voice/custom/create")
+async def create_custom_voice(req: Request):
+    try:
+        if not DASHSCOPE_API_KEY:
+            return JSONResponse({"error": "DASHSCOPE_API_KEY not set"}, status_code=503)
+        if dashscope is None:
+            return JSONResponse({"error": "dashscope sdk not installed"}, status_code=503)
+        body = await req.json()
+        audio_url = body.get("audio_url")
+        if not audio_url:
+            return JSONResponse({"error": "missing audio_url"}, status_code=400)
+
+        voice_id = ""
+        status = ""
+        try:
+            service = VoiceEnrollmentService()
+            print(service, '服务方法方式')
+            voice_id = service.create_voice(
+                target_model=DASHSCOPE_COSY_TTS_MODEL,
+                prefix='myvoice',
+                url=audio_url,
+            )
+            print("create voice", voice_id) 
+            max_attempts = 30
+            interval = 5
+            for _ in range(max_attempts):
+                info = service.query_voice(voice_id=voice_id)
+                if isinstance(info, dict):
+                    status = info.get("status") or ""
+                    if not status:
+                        output = info.get("output") or {}
+                        if isinstance(output, dict):
+                            status = output.get("status") or ""
+                if status == "OK":
+                    break
+                time.sleep(interval)
+        except Exception as e:
+            return JSONResponse({"error": "voice enrollment error", "detail": str(e)}, status_code=502)
+        return {"voice_id": voice_id, "status": status or "UNKNOWN"}
     except:
         return JSONResponse({"error": "server error"}, status_code=500)
 

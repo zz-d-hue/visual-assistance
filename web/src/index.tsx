@@ -4,7 +4,7 @@ import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import '@tensorflow/tfjs';
 import { COCO_CN, PH } from './constants';
 import { drawOverlay } from './overlay';
-import { speakText, unlockAudio, startRecord, stopAndTranscribe } from './speech';
+import { speakText, unlockAudio, startRecord, stopAndCreateVoice } from './speech';
 
 export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -26,9 +26,15 @@ export default function App() {
   const [mode, setMode] = useState<'local' | 'server' | 'parallel'>('server');
   const [status, setStatus] = useState('未开始');
   const [snapshotMode, setSnapshotMode] = useState(false);
-  const [voice, setVoice] = useState<'female_warm' | 'female_bright' | 'male_deep'>('female_warm');
+  const [voice, setVoice] = useState<string>('female_warm');
+  const [voiceOptions, setVoiceOptions] = useState<{ value: string; label: string }[]>([
+    { value: 'female_warm', label: '温柔女声' },
+    { value: 'Jada', label: '上海女声' },
+    { value: 'Ethan', label: '沉稳男声' }
+  ]);
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
-  const [asrText, setAsrText] = useState<string>('');
+  const [customVoiceId, setCustomVoiceId] = useState<string>('');
+  const [creatingVoice, setCreatingVoice] = useState(false);
 
   useEffect(() => {
     captureCanvasRef.current = document.createElement('canvas');
@@ -366,11 +372,7 @@ export default function App() {
             <Select
               value={voice}
               onChange={(v) => setVoice(v as any)}
-              options={[
-                { value: 'female_warm', label: '温柔女声' },
-                { value: 'Jada', label: '上海女声' },
-                { value: 'Ethan', label: '沉稳男声' }
-              ]}
+              options={voiceOptions}
               style={{ width: 140 }}
             />
           </Space>
@@ -386,7 +388,7 @@ export default function App() {
                 if (rec) {
                   rec.start();
                   setRecorder(rec);
-                  setAsrText('');
+                  setCustomVoiceId('');
                 }
               }}
             >
@@ -394,20 +396,31 @@ export default function App() {
             </Button>
             <Button
               disabled={!recorder}
+              loading={creatingVoice}
               onClick={async () => {
                 const rec = recorder;
                 if (!rec) return;
-                const text = await stopAndTranscribe(rec);
+                setCreatingVoice(true);
+                const result = await stopAndCreateVoice(rec);
                 setRecorder(null);
-                setAsrText(text || '');
-                if (text) {
-                  speakText(text, voice);
+                setCreatingVoice(false);
+                if (!result || !result.voiceId) {
+                  setCustomVoiceId('');
+                  return;
                 }
+                const vid = result.voiceId;
+                const label = '自定义音色';
+                setVoiceOptions((prev) => {
+                  if (prev.some((item) => item.value === vid)) return prev;
+                  return [...prev, { value: vid, label }];
+                });
+                setVoice(vid);
+                setCustomVoiceId(vid);
               }}
             >
-              停止并转写
+              停止并创建音色
             </Button>
-            {asrText ? <Badge count="已转写" /> : null}
+            {customVoiceId ? <Badge count="已创建音色" /> : null}
           </Space>
           <Space>
             <span>识别频率</span>

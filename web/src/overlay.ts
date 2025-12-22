@@ -22,15 +22,20 @@ export function drawOverlay(canvas: HTMLCanvasElement | null, dets: Det[], keepB
     const boxW = tw + padding * 2;
     const boxH = th + padding * 2;
 
-    const anchorX = x + Math.max(6, Math.min(12, w * 0.1));
-    const anchorY = y + Math.max(6, Math.min(12, h * 0.1));
+    const rawCx = x + w / 2;
+    const offsetX = canvas.width * 0.15;
+    const cx = rawCx + offsetX;
+    const topY = y;
 
-    let tx = Math.max(0, Math.min(canvas.width - boxW, x + 2));
-    let ty = y - boxH - gap;
+    const anchorX = cx;
+    const anchorY = topY;
+
+    let tx = cx - boxW / 2;
+    let ty = topY - boxH - gap;
 
     let arrowDir: 'up' | 'down' = 'down';
     if (ty < 0) {
-      ty = y + gap;
+      ty = topY + gap;
       arrowDir = 'up';
     }
     tx = Math.max(0, Math.min(canvas.width - boxW, tx));

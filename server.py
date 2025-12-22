@@ -2,7 +2,6 @@ import os
 import json
 import base64
 import time
-import re
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -61,7 +60,7 @@ async def detect(req: Request):
                             "\"position\":\"左前方|右前方|正前方\",\"distance_m\":0.0,"
                             "\"moving\":false,\"urgency\":\"高|中|低\",\"reason\":\"简短中文理由\"}"
                             "]}"
-                            "要求：1) bbox 单位为像素，需在画布范围内；"
+                            "要求：1) bbox=[x,y,w,h] 中：x,y 为该物体外接矩形左上角的像素坐标，w,h 为该矩形的宽和高（像素），矩形需尽量紧贴该物体轮廓，且必须完全落在画布范围内；"
                             "2) position 按水平角度粗分：x+bw/2 < 0.45*width 视为左前方，> 0.55*width 视为右前方，其他为正前方；"
                             "3) distance_m 若能估计则给出近似值，否则填 null；可依据目标在画面中的相对高度比 h/height 粗略估计；"
                             "4) 若同时提供上一帧图像，请比较两帧判断 moving（中心或尺寸显著变化视为 true）；"
@@ -97,7 +96,6 @@ async def detect(req: Request):
             parsed = {"detections": []}
         return parsed
     except Exception as e:
-        print(f"Error: {e}")
         return JSONResponse({"error": "server error", "detail": str(e)}, status_code=500)
 
 @app.post("/api/voice/asr")
@@ -253,13 +251,11 @@ async def create_custom_voice(req: Request):
         status = ""
         try:
             service = VoiceEnrollmentService()
-            print(service, '服务方法方式')
             voice_id = service.create_voice(
                 target_model=DASHSCOPE_COSY_TTS_MODEL,
                 prefix='myvoice',
                 url=audio_url,
             )
-            print("create voice", voice_id) 
             max_attempts = 30
             interval = 5
             for _ in range(max_attempts):

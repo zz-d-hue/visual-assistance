@@ -135,7 +135,6 @@ export default function App() {
         height: canvas.height
       })
     });
-
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
       throw new Error(text || 'server error');
@@ -224,6 +223,11 @@ export default function App() {
     }
 
     lastDetsRef.current = dets;
+    if (!runningRef.current) return;
+    const canvas = canvasRef.current;
+    if (canvas) {
+      drawOverlay(canvas, dets);
+    }
     speakDetections(dets, source);
   }
 

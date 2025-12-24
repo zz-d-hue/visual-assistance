@@ -264,11 +264,12 @@ export default function App() {
     if (canvas && ctx) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
-
     if (!window.isSecureContext) {
       alert('当前为非安全上下文，摄像头被阻止。请使用 https 或 localhost。');
       return;
     }
+    setRunning(true);
+
     try {
       let stream: MediaStream;
       try {
@@ -301,7 +302,6 @@ export default function App() {
       captureCanvas.width = w;
       captureCanvas.height = h;
 
-      setRunning(true);
       runningRef.current = true;
       setStatus('已启动');
 
@@ -354,109 +354,114 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-white text-neutral-900">
-      <div className="border-b border-neutral-200 px-4 py-3">
-        <Space wrap>
-          <Button type="primary" onClick={start} disabled={running}>
-            开始识别
-          </Button>
-          <Button onClick={stop} disabled={!running}>
+    <div className="w-screen h-screen bg-white text-neutral-900">
+      {!running && (
+        <div className="border-b border-neutral-200 px-4 py-3">
+          <Space wrap>
+            <Button type="primary" onClick={start} disabled={running}>
+              开始识别
+            </Button>
+            <Button
+              onClick={() => {
+                unlockAudio();
+                speakText('语音测试', voice);
+              }}
+            >
+              测试语音
+            </Button>
+            <Space>
+              <span>语音音色</span>
+              <Select
+                value={voice}
+                onChange={(v) => setVoice(v as any)}
+                options={voiceOptions}
+                style={{ width: 140 }}
+              />
+            </Space>
+            <Space>
+              <span>语音播报</span>
+              <Switch checked={speakOn} onChange={setSpeakOn} />
+            </Space>
+            <Space>
+              <Button
+                disabled={!!recorder}
+                onClick={async () => {
+                  const rec = await startRecord();
+                  if (rec) {
+                    rec.start();
+                    setRecorder(rec);
+                    setCustomVoiceId('');
+                  }
+                }}
+              >
+                开始录音
+              </Button>
+              <Button
+                disabled={!recorder}
+                loading={creatingVoice}
+                onClick={async () => {
+                  const rec = recorder;
+                  if (!rec) return;
+                  setCreatingVoice(true);
+                  const result = await stopAndCreateVoice(rec);
+                  setRecorder(null);
+                  setCreatingVoice(false);
+                  if (!result || !result.voiceId) {
+                    setCustomVoiceId('');
+                    return;
+                  }
+                  const vid = result.voiceId;
+                  const label = '自定义音色';
+                  setVoiceOptions((prev) => {
+                    if (prev.some((item) => item.value === vid)) return prev;
+                    return [...prev, { value: vid, label }];
+                  });
+                  setVoice(vid);
+                  setCustomVoiceId(vid);
+                }}
+              >
+                停止并创建音色
+              </Button>
+              {customVoiceId ? <Badge count="已创建音色" /> : null}
+            </Space>
+            <Space>
+              <span>识别频率</span>
+              <Select
+                value={fps}
+                onChange={(v) => setFps(Number(v))}
+                options={[
+                  { value: 2, label: '每秒2次' },
+                  { value: 4, label: '每秒4次' },
+                  { value: 8, label: '每秒8次' }
+                ]}
+                style={{ width: 120 }}
+              />
+            </Space>
+            <Radio.Group
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              options={[
+                { label: '本地优先', value: 'local' },
+                { label: '服务端优先', value: 'server' },
+                { label: '并行识别', value: 'parallel' }
+              ]}
+              optionType="button"
+              buttonStyle="solid"
+            />
+          </Space>
+        </div>
+      )}
+
+      <div className="grid place-items-center p-4 relative w-full h-full">
+        {running && (
+          <Button onClick={stop} disabled={!running} className="absolute top-2 right-2 z-10">
             停止识别
           </Button>
-          <Button
-            onClick={() => {
-              unlockAudio();
-              speakText('语音测试', voice);
-            }}
-          >
-            测试语音
-          </Button>
-          <Space>
-            <span>语音音色</span>
-            <Select
-              value={voice}
-              onChange={(v) => setVoice(v as any)}
-              options={voiceOptions}
-              style={{ width: 140 }}
-            />
-          </Space>
-          <Space>
-            <span>语音播报</span>
-            <Switch checked={speakOn} onChange={setSpeakOn} />
-          </Space>
-          <Space>
-            <Button
-              disabled={!!recorder}
-              onClick={async () => {
-                const rec = await startRecord();
-                if (rec) {
-                  rec.start();
-                  setRecorder(rec);
-                  setCustomVoiceId('');
-                }
-              }}
-            >
-              开始录音
-            </Button>
-            <Button
-              disabled={!recorder}
-              loading={creatingVoice}
-              onClick={async () => {
-                const rec = recorder;
-                if (!rec) return;
-                setCreatingVoice(true);
-                const result = await stopAndCreateVoice(rec);
-                setRecorder(null);
-                setCreatingVoice(false);
-                if (!result || !result.voiceId) {
-                  setCustomVoiceId('');
-                  return;
-                }
-                const vid = result.voiceId;
-                const label = '自定义音色';
-                setVoiceOptions((prev) => {
-                  if (prev.some((item) => item.value === vid)) return prev;
-                  return [...prev, { value: vid, label }];
-                });
-                setVoice(vid);
-                setCustomVoiceId(vid);
-              }}
-            >
-              停止并创建音色
-            </Button>
-            {customVoiceId ? <Badge count="已创建音色" /> : null}
-          </Space>
-          <Space>
-            <span>识别频率</span>
-            <Select
-              value={fps}
-              onChange={(v) => setFps(Number(v))}
-              options={[
-                { value: 2, label: '每秒2次' },
-                { value: 4, label: '每秒4次' },
-                { value: 8, label: '每秒8次' }
-              ]}
-              style={{ width: 120 }}
-            />
-          </Space>
-          <Radio.Group
-            value={mode}
-            onChange={(e) => setMode(e.target.value)}
-            options={[
-              { label: '本地优先', value: 'local' },
-              { label: '服务端优先', value: 'server' },
-              { label: '并行识别', value: 'parallel' }
-            ]}
-            optionType="button"
-            buttonStyle="solid"
-          />
-        </Space>
-      </div>
-      <div className="grid place-items-center p-4">
-        <div className="relative w-[92vw] max-w-[1200px]">
+        )}
+        <div className="absolute top-0 left-0 w-full h-full">
           <video
             ref={videoRef}
-            className={`w-full h-auto block ${snapshotMode ? 'hidden' : ''}`}
+            className={`w-full h-auto block ${snapshotMode || !running ? 'hidden' : ''}`}
             playsInline
             autoPlay
             muted
@@ -464,13 +469,14 @@ export default function App() {
           <canvas
             ref={canvasRef}
             className={
-              snapshotMode
+              snapshotMode || !running
                 ? 'w-full h-auto block rounded-lg'
                 : 'absolute inset-0 w-full h-full bg-transparent rounded-lg'
             }
           />
         </div>
       </div>
+
       <div className="fixed bottom-2 right-2 text-sm text-neutral-600">
         <Badge status="processing" text={`状态：${status} · 服务端大模型识别`} />
       </div>

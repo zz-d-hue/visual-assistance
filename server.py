@@ -15,7 +15,6 @@ from dashscope.audio.tts_v2 import VoiceEnrollmentService, SpeechSynthesizer
 app = FastAPI()
 
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
-# Use qwen-vl-max for better speed/quality as requested (user asked for qwen-plus but that is text-only)
 DASHSCOPE_API_MODEL = os.environ.get("DASHSCOPE_API_MODEL", "qwen3-vl-flash")
 DASHSCOPE_ASR_MODEL = os.environ.get("DASHSCOPE_ASR_MODEL", "qwen3-asr-flash")
 DASHSCOPE_TTS_MODEL = os.environ.get("DASHSCOPE_TTS_MODEL", "qwen3-tts-flash")

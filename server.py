@@ -15,10 +15,11 @@ from dashscope.audio.tts_v2 import VoiceEnrollmentService, SpeechSynthesizer
 app = FastAPI()
 
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
-DASHSCOPE_API_MODEL = os.environ.get("DASHSCOPE_API_MODEL", "qwen3-vl-flash")
-DASHSCOPE_ASR_MODEL = os.environ.get("DASHSCOPE_ASR_MODEL", "qwen3-asr-flash")
-DASHSCOPE_TTS_MODEL = os.environ.get("DASHSCOPE_TTS_MODEL", "qwen3-tts-flash")
-DASHSCOPE_COSY_TTS_MODEL = os.environ.get("DASHSCOPE_COSY_TTS_MODEL", "cosyvoice-v3-flash")
+DASHSCOPE_API_MODEL = 'qwen3-vl-flash'
+DASHSCOPE_ASR_MODEL = 'qwen3-asr-flash'
+DASHSCOPE_TTS_MODEL = 'qwen3-tts-flash'
+DASHSCOPE_COSY_TTS_MODEL = 'cosyvoice-v3-flash'
+AMAP_WEB_KEY = '1060a21b5e092d50516a945145de0463'
 
 if DASHSCOPE_API_KEY:
     dashscope.api_key = DASHSCOPE_API_KEY
@@ -273,6 +274,120 @@ async def create_custom_voice(req: Request):
         return {"voice_id": voice_id, "status": status or "UNKNOWN"}
     except:
         return JSONResponse({"error": "server error"}, status_code=500)
+
+
+@app.post("/api/nav/route")
+async def nav_route(req: Request):
+    try:
+        if not AMAP_WEB_KEY:
+            return JSONResponse({"error": "AMAP_WEB_KEY not set"}, status_code=503)
+        body = await req.json()
+        lat = body.get("lat")
+        lng = body.get("lng")
+        raw_keyword = (body.get("keyword") or "").strip()
+        keyword = raw_keyword
+        for prefix in ["我想去", "我要去", "想去", "去", "到", "导航去"]:
+            if keyword.startswith(prefix):
+                keyword = keyword[len(prefix) :].strip()
+                break
+        if not keyword:
+            keyword = raw_keyword
+        if not keyword or lat is None or lng is None:
+            return JSONResponse({"error": "missing lat/lng/keyword"}, status_code=400)
+
+        try:
+            lat_f = float(lat)
+            lng_f = float(lng)
+        except Exception:
+            return JSONResponse({"error": "invalid lat/lng"}, status_code=400)
+
+        try:
+            place_resp = requests.get(
+                "https://restapi.amap.com/v3/place/text",
+                params={
+                    "key": AMAP_WEB_KEY,
+                    "keywords": keyword,
+                    "offset": 1,
+                    "page": 1,
+                },
+                timeout=10,
+            )
+            print("AMap place raw:", place_resp.status_code, place_resp.text)
+        except Exception as e:
+            return JSONResponse({"error": "amap place error", "detail": str(e)}, status_code=502)
+
+        try:
+            place_json = place_resp.json()
+        except Exception:
+            place_json = {}
+        if place_json.get("status") != "1":
+            print("AMap place json error:", place_json)
+            return JSONResponse({"error": "amap place status error", "detail": place_json}, status_code=502)
+        pois = place_json.get("pois") or []
+        if not pois:
+            print("AMap place no pois:", keyword, place_json)
+            return JSONResponse({"error": "no destination found"}, status_code=404)
+        dest = pois[0]
+        dest_name = dest.get("name") or keyword
+        dest_loc = dest.get("location") or ""
+        try:
+            dest_lng_str, dest_lat_str = dest_loc.split(",")
+            dest_lng = float(dest_lng_str)
+            dest_lat = float(dest_lat_str)
+        except Exception:
+            return JSONResponse({"error": "invalid destination location"}, status_code=502)
+
+        try:
+            route_resp = requests.get(
+                "https://restapi.amap.com/v3/direction/walking",
+                params={
+                    "key": AMAP_WEB_KEY,
+                    "origin": f"{lng_f},{lat_f}",
+                    "destination": f"{dest_lng},{dest_lat}",
+                },
+                timeout=10,
+            )
+        except Exception as e:
+            return JSONResponse({"error": "amap route error", "detail": str(e)}, status_code=502)
+
+        try:
+            route_json = route_resp.json()
+        except Exception:
+            route_json = {}
+        if route_json.get("status") != "1":
+            return JSONResponse({"error": "amap route status error", "detail": route_json}, status_code=502)
+
+        route = (route_json.get("route") or {})
+        paths = route.get("paths") or []
+        steps_out = []
+        if paths:
+            first = paths[0]
+            steps = first.get("steps") or []
+            for s in steps:
+                if not isinstance(s, dict):
+                    continue
+                ins = s.get("instruction") or ""
+                dist = s.get("distance")
+                try:
+                    dist_i = int(dist)
+                except Exception:
+                    dist_i = 0
+                steps_out.append(
+                    {
+                        "instruction": ins,
+                        "distance": dist_i,
+                    }
+                )
+
+        return {
+            "destination": {
+                "name": dest_name,
+                "location": {"lat": dest_lat, "lng": dest_lng},
+            },
+            "steps": steps_out,
+        }
+    except Exception as e:
+        return JSONResponse({"error": "server error", "detail": str(e)}, status_code=500)
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

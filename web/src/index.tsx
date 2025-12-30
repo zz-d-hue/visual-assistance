@@ -4,7 +4,14 @@ import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import '@tensorflow/tfjs';
 import { COCO_CN, PH } from './constants';
 import { drawOverlay } from './overlay';
-import { speakText, unlockAudio, startRecord, stopAndCreateVoice } from './speech';
+import {
+  speakText,
+  unlockAudio,
+  startRecord,
+  stopAndCreateVoice,
+  speakNav,
+  stopAndRecognize
+} from './speech';
 
 export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -33,6 +40,7 @@ export default function App() {
     { value: 'Ethan', label: '沉稳男声' }
   ]);
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
+  const [navRecorder, setNavRecorder] = useState<MediaRecorder | null>(null);
   const [customVoiceId, setCustomVoiceId] = useState<string>('');
   const [creatingVoice, setCreatingVoice] = useState(false);
 
@@ -381,6 +389,79 @@ export default function App() {
             <Space>
               <span>语音播报</span>
               <Switch checked={speakOn} onChange={setSpeakOn} />
+            </Space>
+            <Space>
+              <Button
+                onClick={async () => {
+                  if (!navRecorder) {
+                    const rec = await startRecord();
+                    if (!rec) {
+                      speakText('无法获取麦克风权限');
+                      return;
+                    }
+                    rec.start();
+                    setNavRecorder(rec);
+                    speakText('正在录音，请说出想去的地点，然后再次点击语音导航按钮结束');
+                    return;
+                  }
+
+                  const rec = navRecorder;
+                  setNavRecorder(null);
+
+                  const text = await stopAndRecognize(rec);
+                  console.log('导航目的地：', text);
+                  if (!text) {
+                    speakText('没有识别到目的地');
+                    return;
+                  }
+
+                  if (!navigator.geolocation) {
+                    speakText('当前设备不支持定位');
+                    return;
+                  }
+
+                  navigator.geolocation.getCurrentPosition(
+                    async (pos) => {
+                      const lat = pos.coords.latitude;
+                      const lng = pos.coords.longitude;
+                      try {
+                        const r = await fetch('/api/nav/route', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ lat, lng, keyword: text })
+                        });
+                        if (!r.ok) {
+                          let msg = '没有找到合适的路线';
+                          try {
+                            const err = await r.json();
+                            if (r.status === 404 || err?.error === 'no destination found') {
+                              msg = '没有找到相关地点，请换个说法再试一次';
+                            }
+                          } catch {}
+                          speakText(msg);
+                          return;
+                        }
+                        const j = await r.json();
+                        const destName = (j.destination && j.destination.name) || text;
+                        const steps = j.steps || [];
+                        const first = steps[0];
+                        let msg = `已为你规划到${destName}的路线。`;
+                        if (first && first.instruction) {
+                          msg += `第一步，${first.instruction}`;
+                        }
+                        speakNav(msg, voice);
+                      } catch {
+                        speakText('无法获取导航路线');
+                      }
+                    },
+                    () => {
+                      speakText('无法获取当前位置');
+                    }
+                  );
+                }}
+              >
+                {navRecorder ? '停止并识别目的地' : '语音导航'}
+              </Button>
             </Space>
             <Space>
               <Button

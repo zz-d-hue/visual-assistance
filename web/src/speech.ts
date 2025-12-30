@@ -1,8 +1,12 @@
 import { uploadToOss } from './upload';
 
+type SpeechKind = 'detect' | 'nav';
+
 interface QueueItem {
   text: string;
   voice: string;
+  kind: SpeechKind;
+  onDone?: () => void;
 }
 
 const queue: QueueItem[] = [];
@@ -93,7 +97,12 @@ async function convertToWavBlob(blob: Blob): Promise<Blob> {
 }
 
 export async function speakText(text: string, voice: string = 'female_warm') {
-  queue.push({ text, voice });
+  queue.push({ text, voice, kind: 'detect' });
+  processQueue();
+}
+
+export async function speakNav(text: string, voice: string = 'female_warm') {
+  queue.push({ text, voice, kind: 'nav' });
   processQueue();
 }
 
@@ -102,7 +111,13 @@ async function processQueue() {
   if (queue.length === 0) return;
 
   isProcessing = true;
-  const item = queue.shift();
+  let item: QueueItem | undefined;
+  const navIndex = queue.findIndex((q) => q.kind === 'nav');
+  if (navIndex >= 0) {
+    item = queue.splice(navIndex, 1)[0];
+  } else {
+    item = queue.shift();
+  }
   if (!item) {
     isProcessing = false;
     return;
@@ -162,6 +177,9 @@ async function processQueue() {
   } catch (e) {
     console.error('TTS error:', e);
   } finally {
+    try {
+      item?.onDone?.();
+    } catch {}
     isProcessing = false;
     if (queue.length > 0) {
       processQueue();
@@ -242,6 +260,53 @@ export async function stopAndCreateVoice(rec: MediaRecorder): Promise<CreateVoic
           return;
         }
         resolve({ voiceId, status });
+      } catch {
+        resolve(null);
+      }
+    };
+    rec.stop();
+  });
+}
+
+export async function stopAndRecognize(rec: MediaRecorder): Promise<string | null> {
+  const chunks: BlobPart[] = [];
+  return new Promise((resolve) => {
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    rec.onstop = async () => {
+      try {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          try {
+            const result = reader.result;
+            if (typeof result !== 'string') {
+              resolve(null);
+              return;
+            }
+            const base64 = result.split(',')[1] || '';
+            if (!base64) {
+              resolve(null);
+              return;
+            }
+            const r = await fetch('/api/voice/asr', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ audio_base64: base64 })
+            });
+            if (!r.ok) {
+              resolve(null);
+              return;
+            }
+            const j = await r.json().catch(() => ({} as any));
+            const text = j.text || '';
+            resolve(text || null);
+          } catch {
+            resolve(null);
+          }
+        };
+        reader.readAsDataURL(blob);
       } catch {
         resolve(null);
       }

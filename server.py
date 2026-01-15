@@ -372,10 +372,12 @@ async def nav_route(req: Request):
                     dist_i = int(dist)
                 except Exception:
                     dist_i = 0
+                polyline = s.get("polyline") or ""
                 steps_out.append(
                     {
                         "instruction": ins,
                         "distance": dist_i,
+                        "polyline": polyline,
                     }
                 )
 

@@ -106,6 +106,13 @@ export async function speakNav(text: string, voice: string = 'female_warm') {
   processQueue();
 }
 
+export async function speakNavAndWait(text: string, voice: string = 'female_warm'): Promise<void> {
+  return new Promise((resolve) => {
+    queue.push({ text, voice, kind: 'nav', onDone: resolve });
+    processQueue();
+  });
+}
+
 async function processQueue() {
   if (isProcessing) return;
   if (queue.length === 0) return;

@@ -13,6 +13,6 @@ export default defineConfig({
         changeOrigin: true
       }
     },
-    allowedHosts: ['laptops-mysimon-else-refers.trycloudflare.com']
+    allowedHosts: ['jaguar-sql-mayor-minerals.trycloudflare.com']
   }
 });

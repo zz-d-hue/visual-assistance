@@ -14,6 +14,7 @@ export function useVoiceNavigation(voice: string) {
   const [navRecorder, setNavRecorder] = useState<MediaRecorder | null>(null);
   const [navActive, setNavActive] = useState(false);
   const [navWatchId, setNavWatchId] = useState<number | null>(null);
+  const [navLoading, setNavLoading] = useState(false);
 
   function parsePolyline(polyline: string): { lat: number; lng: number }[] {
     if (!polyline) return [];
@@ -58,16 +59,19 @@ export function useVoiceNavigation(voice: string) {
 
     const rec = navRecorder;
     setNavRecorder(null);
+    setNavLoading(true);
 
     const text = await stopAndRecognize(rec);
     console.log('导航目的地：', text);
     if (!text) {
       speakText('没有识别到目的地');
+      setNavLoading(false);
       return;
     }
 
     if (!navigator.geolocation) {
       speakText('当前设备不支持定位');
+      setNavLoading(false);
       return;
     }
 
@@ -90,6 +94,7 @@ export function useVoiceNavigation(voice: string) {
               }
             } catch {}
             speakText(msg);
+            setNavLoading(false);
             return;
           }
           const j = await r.json();
@@ -112,6 +117,7 @@ export function useVoiceNavigation(voice: string) {
               await speakNavAndWait(msg, voice);
             } finally {
               setNavActive(false);
+              setNavLoading(false);
             }
             return;
           }
@@ -124,6 +130,7 @@ export function useVoiceNavigation(voice: string) {
           const threshold = 25;
 
           await speakNavAndWait(msg, voice);
+          setNavLoading(false);
 
           const watchId = navigator.geolocation.watchPosition(
             (p) => {
@@ -166,15 +173,17 @@ export function useVoiceNavigation(voice: string) {
           setNavWatchId(watchId);
         } catch {
           speakText('无法获取导航路线');
+          setNavLoading(false);
         }
       },
       () => {
         speakText('无法获取当前位置');
+        setNavLoading(false);
       }
     );
   }
 
-  return { navRecorder, navActive, navWatchId, handleNavClick };
+  return { navRecorder, navActive, navWatchId, navLoading, handleNavClick };
 }
 
 export function useVisionDetection(navActive: boolean, voice: string) {
@@ -206,7 +215,6 @@ export function useVisionDetection(navActive: boolean, voice: string) {
   }, []);
 
   function speakDetections(dets: Det[], source: 'server' | 'local' | 'merged') {
-    if (navActive) return;
     if (!speakOn) return;
     if (mode === 'server' && source !== 'server') return;
 

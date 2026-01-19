@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Button, Switch, Select, Radio, Space, Badge } from 'antd';
-
 import '@tensorflow/tfjs';
 import { speakText, unlockAudio, startRecord, stopAndCreateVoice } from './speech';
 import { useVoiceNavigation, useVisionDetection } from './hooks';
@@ -16,7 +15,7 @@ export default function App() {
   const [customVoiceId, setCustomVoiceId] = useState<string>('');
   const [creatingVoice, setCreatingVoice] = useState(false);
 
-  const { navRecorder, navActive, handleNavClick } = useVoiceNavigation(voice);
+  const { navRecorder, navActive, navLoading, handleNavClick } = useVoiceNavigation(voice);
 
   const {
     videoRef,
@@ -91,22 +90,18 @@ export default function App() {
               <span>语音播报</span>
               <Switch checked={speakOn} onChange={setSpeakOn} />
             </Space>
+            <Button onClick={handleNavClick} loading={navLoading}>
+              {navRecorder ? '停止并识别目的地' : '语音导航'}
+            </Button>
             <Space>
-              <Button onClick={handleNavClick}>
-                {navRecorder ? '停止并识别目的地' : '语音导航'}
-              </Button>
-            </Space>
-            <Space>
-              <Button disabled={!!recorder} onClick={handleStartCustomRecord}>
-                开始录音
-              </Button>
-              <Button
-                disabled={!recorder}
-                loading={creatingVoice}
-                onClick={handleStopAndCreateVoice}
-              >
-                停止并创建音色
-              </Button>
+              {!!recorder ? (
+                <Button loading={creatingVoice} onClick={handleStopAndCreateVoice}>
+                  结束录音
+                </Button>
+              ) : (
+                <Button onClick={handleStartCustomRecord}>开始录音并创建音色</Button>
+              )}
+
               {customVoiceId ? <Badge count="已创建音色" /> : null}
             </Space>
             <Space>
